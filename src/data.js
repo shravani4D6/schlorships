@@ -1,11 +1,11 @@
-import scholarshipsText from '../Scholarships-detail-page.csv?raw';
-import class1to10LiveText from '../Class(1-10)-live-detailPage.csv?raw';
-import class11to12LiveText from '../Class(11-12)-live-detailPage.csv?raw';
-import girlsLiveText from '../Girls-live-detailPage.csv?raw';
-import girlsUpcomingText from '../Girls-upcoming-detailPage.csv?raw';
-import graduationLiveText from '../Graduation-live-detailPage.csv?raw';
-import gujaratUpcomingText from '../Gujarat-upcoming-detailPage.csv?raw';
-import categoriesWorkbookUrl from '../CM-Scholarships-info.xlsx?url';
+import scholarshipsText from '../data/Scholarships-detail-page.csv?raw';
+import class1to10LiveText from '../data/Class(1-10)-live-detailPage.csv?raw';
+import class11to12LiveText from '../data/Class(11-12)-live-detailPage.csv?raw';
+import girlsLiveText from '../data/Girls-live-detailPage.csv?raw';
+import girlsUpcomingText from '../data/Girls-upcoming-detailPage.csv?raw';
+import graduationLiveText from '../data/Graduation-live-detailPage.csv?raw';
+import gujaratUpcomingText from '../data/Gujarat-upcoming-detailPage.csv?raw';
+import categoriesWorkbookUrl from '../data/CM-Scholarships-info.xlsx?url';
 
 const DETAIL_CATEGORY_IMAGES = {
   'means-based-scholarship': '/images/means_based.png',
