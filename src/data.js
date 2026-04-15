@@ -275,6 +275,21 @@ function buildScholarshipSourceRows(sourceId, text) {
 
 function mergeScholarshipRows(rows) {
   const mergedRows = new Map();
+  const logoByTitle = new Map();
+
+  rows.forEach((row) => {
+    const title = sanitizeText(row.Name || row.Title || row['Scholarship Name']);
+    const logo = sanitizeText(row.Logo);
+
+    if (!title || !logo) {
+      return;
+    }
+
+    const titleKey = normalizeWhitespace(title).toLowerCase();
+    if (!logoByTitle.has(titleKey)) {
+      logoByTitle.set(titleKey, logo);
+    }
+  });
 
   rows.forEach((row) => {
     const title = sanitizeText(row.Name || row.Title || row['Scholarship Name']);
@@ -307,6 +322,20 @@ function mergeScholarshipRows(rows) {
     });
 
     existing.__sourceIds = Array.from(sourceIds);
+  });
+
+  mergedRows.forEach((row) => {
+    if (sanitizeText(row.Logo)) {
+      return;
+    }
+
+    const title = sanitizeText(row.Name || row.Title || row['Scholarship Name']);
+    const titleKey = normalizeWhitespace(title).toLowerCase();
+    const fallbackLogo = logoByTitle.get(titleKey);
+
+    if (fallbackLogo) {
+      row.Logo = fallbackLogo;
+    }
   });
 
   return Array.from(mergedRows.values());
@@ -401,6 +430,104 @@ function parseHowToApplySteps(value) {
     .map((part) => normalizeWhitespace(part))
     .filter(Boolean)
     .slice(0, 8);
+}
+
+function parseFaqItems(value) {
+  const text = sanitizeText(value);
+  if (!text) {
+    return [];
+  }
+
+  const segments = text
+    .split(/\s*\|\|\s*/)
+    .map((item) => normalizeWhitespace(item))
+    .filter(Boolean);
+
+  const faqItems = [];
+  const seen = new Set();
+
+  segments.forEach((segment) => {
+    let question = '';
+    let answer = '';
+
+    const qaMatch = segment.match(/(?:Q|Question)\s*[:.-]\s*(.+?)(?:\s*\|\s*|\s+)(?:A|Answer)\s*[:.-]\s*([\s\S]+)/i);
+    if (qaMatch) {
+      question = sanitizeText(qaMatch[1]);
+      answer = sanitizeText(qaMatch[2]);
+    } else {
+      const questionMatch = segment.match(/(?:Q|Question)\s*[:.-]\s*(.+)/i);
+      if (questionMatch) {
+        question = sanitizeText(questionMatch[1]);
+      }
+
+      const answerMatch = segment.match(/(?:A|Answer)\s*[:.-]\s*(.+)/i);
+      if (answerMatch) {
+        answer = sanitizeText(answerMatch[1]);
+      }
+
+      if (!question && segment.includes('?')) {
+        const [head, ...tail] = segment.split('?');
+        question = sanitizeText(`${head}?`);
+        answer = sanitizeText(tail.join('?'));
+      }
+    }
+
+    if (!question && !answer) {
+      return;
+    }
+
+    const key = `${question}|${answer}`.toLowerCase();
+    if (seen.has(key)) {
+      return;
+    }
+
+    seen.add(key);
+    faqItems.push({ question, answer });
+  });
+
+  return faqItems.slice(0, 10);
+}
+
+function toDisplayLabel(key) {
+  return normalizeWhitespace(String(key || ''))
+    .replace(/_/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function parseAdditionalDetails(row) {
+  const ignoredKeys = new Set([
+    'Name',
+    'Title',
+    'Scholarship Name',
+    'Logo',
+    'Relative_Path',
+    'Link',
+    'Deadline',
+    'Award',
+    'Eligibility',
+    'About',
+    'Detailed_Eligibility',
+    'Eligibility_Detail',
+    'Benefits',
+    'Documents',
+    'How_to_Apply',
+    'Important_Dates',
+    'Selection_Criteria',
+    'Terms_and_Conditions',
+    'Contact_Details',
+    'Important_Links',
+    'FAQs',
+    '__sourceIds',
+  ]);
+
+  return Object.entries(row)
+    .filter(([key]) => !ignoredKeys.has(key))
+    .map(([key, value]) => ({
+      label: toDisplayLabel(key),
+      value: sanitizeText(value),
+    }))
+    .filter((entry) => entry.label && entry.value);
 }
 
 function inferText(record) {
@@ -936,6 +1063,16 @@ function choosePrimaryCategory(record, filters) {
   return 'college-scholarship';
 }
 
+function extractLogoFileName(logoPath) {
+  const normalized = sanitizeText(logoPath).replace(/\\/g, '/');
+  if (!normalized) {
+    return '';
+  }
+
+  const parts = normalized.split('/').filter(Boolean);
+  return parts[parts.length - 1] || '';
+}
+
 export const scholarships = scholarshipRows
   .map((row) => {
     const title = sanitizeText(row.Name || row.Title || row['Scholarship Name']);
@@ -954,14 +1091,25 @@ export const scholarships = scholarshipRows
       id: slugify(title),
       title,
       brandName: extractBrandName(title),
+      logoPath: sanitizeText(row.Logo),
+      logoFileName: extractLogoFileName(row.Logo),
+      relativePath: sanitizeText(row.Relative_Path),
       link: sanitizeText(row.Link),
       deadline: sanitizeText(row.Deadline),
       award: sanitizeText(row.Award),
       eligibility,
       about: sanitizeText(row.About),
-      detailedEligibility: sanitizeText(row.Detailed_Eligibility),
+      detailedEligibility: sanitizeText(row.Detailed_Eligibility || row.Eligibility_Detail),
       benefits: sanitizeText(row.Benefits),
+      documents: sanitizeText(row.Documents),
       howToApply: sanitizeText(row.How_to_Apply),
+      importantDates: sanitizeText(row.Important_Dates),
+      selectionCriteria: sanitizeText(row.Selection_Criteria),
+      termsAndConditions: sanitizeText(row.Terms_and_Conditions),
+      contactDetails: sanitizeText(row.Contact_Details),
+      importantLinks: sanitizeText(row.Important_Links),
+      faqItems: parseFaqItems(row.FAQs),
+      additionalDetails: parseAdditionalDetails(row),
     };
     const status = detectStatus(record.deadline);
     record.status = status;

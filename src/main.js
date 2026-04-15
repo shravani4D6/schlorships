@@ -3,11 +3,18 @@ import { categories, scholarships, filterGroups, categoryFilterSpecs, escapeHtml
 
 const app = document.querySelector('#app');
 
+function getScholarshipLogoUrl(scholarship) {
+  const fileName = String(scholarship.logoFileName || '').trim();
+  return fileName ? `/logos/${encodeURIComponent(fileName)}` : '/logos/_default_logo.png';
+}
+
 const statusLabels = {
   live: 'Live Scholarships',
   upcoming: 'Closed Scholarships',
   always: 'Always Open',
 };
+
+const savedScholarshipsStorageKey = 'savedScholarshipIds';
 
 
 const categoryLookup = new Map(categories.map((category) => [category.id, category]));
@@ -18,6 +25,73 @@ function slugify(value) {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '');
+}
+
+function getListingPath() {
+  return '/scholarships';
+}
+
+function getScholarshipDetailPath(scholarshipId) {
+  return `/scholarships/${encodeURIComponent(String(scholarshipId || ''))}`;
+}
+
+function normalizePathname(pathname) {
+  const trimmed = String(pathname || '').replace(/\/+$/, '');
+  return trimmed || '/';
+}
+
+function getRouteFromLocation() {
+  const pathname = normalizePathname(window.location.pathname);
+  const segments = pathname.split('/').filter(Boolean);
+
+  if (segments.length === 0) {
+    return { view: 'home' };
+  }
+
+  if (segments[0] !== 'scholarships') {
+    return { view: 'home' };
+  }
+
+  if (segments.length === 1) {
+    return { view: 'listing' };
+  }
+
+  return {
+    view: 'details',
+    scholarshipId: decodeURIComponent(segments.slice(1).join('/')),
+  };
+}
+
+function getRoutePath(view, params = {}) {
+  if (view === 'listing') {
+    return getListingPath();
+  }
+
+  if (view === 'details') {
+    return getScholarshipDetailPath(params.id);
+  }
+
+  return '/';
+}
+
+function syncStateToLocation() {
+  const route = getRouteFromLocation();
+
+  state.view = route.view;
+  state.detailsTab = 'about';
+  state.expandedContent = {};
+
+  if (route.view === 'home') {
+    resetListingState();
+    return;
+  }
+
+  if (route.view === 'listing') {
+    state.selectedScholarshipId = null;
+    return;
+  }
+
+  state.selectedScholarshipId = route.scholarshipId || null;
 }
 
 function getBrandMonogram(value) {
@@ -52,6 +126,24 @@ function createFilterState() {
   return Object.fromEntries(filterGroups.map((group) => [group.id, []]));
 }
 
+function loadSavedScholarshipIds() {
+  try {
+    const raw = localStorage.getItem(savedScholarshipsStorageKey);
+    if (!raw) {
+      return [];
+    }
+
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.map((item) => String(item)) : [];
+  } catch {
+    return [];
+  }
+}
+
+function persistSavedScholarshipIds(savedIds) {
+  localStorage.setItem(savedScholarshipsStorageKey, JSON.stringify(savedIds));
+}
+
 const state = {
   view: 'home',
   selectedCategory: null,
@@ -64,13 +156,14 @@ const state = {
   categoryFieldFilters: {},
   categoryFieldFiltersTouched: false,
   activeFilters: createFilterState(),
+  savedScholarshipIds: loadSavedScholarshipIds(),
 };
 
 function renderExpandableContent(key, text, maxChars = 320) {
   const normalized = String(text || '').replace(/\s+/g, ' ').trim();
 
   if (!normalized) {
-    return '<p>Not provided in the CSV file.</p>';
+    return '';
   }
 
   if (normalized.length <= maxChars) {
@@ -193,12 +286,20 @@ function resetListingState() {
   state.activeFilters = createFilterState();
 }
 
-function navigate(view, params = {}) {
+function navigate(view, params = {}, options = {}) {
+  const nextPath = getRoutePath(view, params);
+
   state.view = view;
 
   if (view === 'home') {
     resetListingState();
   } else {
+    if (view !== 'details') {
+      state.selectedScholarshipId = null;
+      state.detailsTab = 'about';
+      state.expandedContent = {};
+    }
+
     if (Object.prototype.hasOwnProperty.call(params, 'category')) {
       applySelectedCategory(params.category);
     }
@@ -208,6 +309,12 @@ function navigate(view, params = {}) {
       state.detailsTab = 'about';
       state.expandedContent = {};
     }
+  }
+
+  if (options.replace) {
+    window.history.replaceState({ view, params }, '', nextPath);
+  } else if (normalizePathname(window.location.pathname) !== normalizePathname(nextPath)) {
+    window.history.pushState({ view, params }, '', nextPath);
   }
 
   render();
@@ -398,6 +505,42 @@ function inferScholarshipTopic(scholarship) {
   return 'General Eligibility';
 }
 
+function inferScholarshipLevel(scholarship) {
+  const text = [
+    scholarship.title,
+    scholarship.eligibility,
+    scholarship.about,
+    scholarship.detailedEligibility,
+    scholarship.course,
+  ].join(' ').toLowerCase();
+
+  if (/(classes?\s*1\s*(?:to|-|–)\s*10|class\s*1\s*(?:to|-|–)\s*10)/.test(text)) {
+    return 'Class 1-10';
+  }
+
+  if (/(classes?\s*11\s*(?:to|-|–)\s*12|class\s*11\s*(?:to|-|–)\s*12|post-?matric)/.test(text)) {
+    return 'Class 11-12';
+  }
+
+  if (/(class\s*(1|2|3|4|5|6|7|8|9|10|11|12)|school|pre-?matric|matric)/.test(text)) {
+    return 'School';
+  }
+
+  if (/(phd|doctorate|doctoral|research)/.test(text)) {
+    return 'PhD / Research';
+  }
+
+  if (/(postgraduate|\bpg\b|master|m\.?tech|m\.?sc|m\.?a)/.test(text)) {
+    return 'Postgraduate';
+  }
+
+  if (/(undergraduate|\bug\b|graduation|graduate|bachelor|college|diploma|b\.?tech|b\.?sc|b\.?a)/.test(text)) {
+    return 'UG / Graduation';
+  }
+
+  return 'All Levels';
+}
+
 function compactCardText(value, maxLength = 52) {
   const text = String(value || '').replace(/\s+/g, ' ').trim();
   if (!text) {
@@ -413,7 +556,7 @@ function compactCardText(value, maxLength = 52) {
 
 function formatCardDeadline(value) {
   if (!value) {
-    return 'Open';
+    return '';
   }
 
   const parsed = new Date(value);
@@ -424,17 +567,181 @@ function formatCardDeadline(value) {
   return parsed.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: '2-digit' }).replace(/ /g, '-');
 }
 
+function extractImportantDateByType(text, type) {
+  const source = String(text || '').trim();
+  if (!source) {
+    return '';
+  }
+
+  const pattern = type === 'start'
+    ? /(?:application\s*)?(?:start|starting|open|opening)\s*(?:date)?\s*[:\-]\s*([^\n|;,]+)/i
+    : /(?:application\s*)?(?:end|ending|close|closing|deadline|last\s*date)\s*(?:date)?\s*[:\-]\s*([^\n|;,]+)/i;
+
+  const match = source.match(pattern);
+  return match ? String(match[1] || '').trim() : '';
+}
+
+function normalizeDateLikeText(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/application|date|deadline|start|end|opening|closing|last/g, '')
+    .replace(/[^a-z0-9]/g, '');
+}
+
 function renderHowToApplySteps(scholarship) {
-  const steps = scholarship.howToApplySteps || [];
-  if (steps.length === 0) {
-    return `<p>${escapeHtml(scholarship.howToApply || 'Use the official scholarship link for application instructions.')}</p>`;
+  const explicitSteps = scholarship.howToApplySteps || [];
+  const applyStepKeyBase = `apply-step-${String(scholarship.id || 'x')}`;
+
+  if (explicitSteps.length > 0) {
+    const cleanedExplicitText = explicitSteps
+      .map((step) => String(step || '').replace(/^\s*step\s*\d+\s*:\s*/i, '').trim())
+      .filter(Boolean)
+      .join('\n\n');
+
+    if (!cleanedExplicitText) {
+      return '';
+    }
+
+    return `<div class="apply-step-content">${renderExpandableContent(`${applyStepKeyBase}-all`, cleanedExplicitText, 340)}</div>`;
+  }
+
+  const rawText = String(scholarship.howToApply || '').trim();
+  if (!rawText) {
+    return '';
+  }
+
+  const cleanedText = rawText.replace(/\uFFFD/g, '').replace(/\s+/g, ' ').trim();
+  const stepPattern = /Step\s*(\d+)\s*:\s*/gi;
+  const matches = [...cleanedText.matchAll(stepPattern)];
+
+  if (matches.length === 0) {
+    return `<div class="apply-step-content">${renderExpandableContent(`${applyStepKeyBase}-all`, cleanedText, 340)}</div>`;
+  }
+
+  const steps = [];
+  const introText = cleanedText.slice(0, matches[0].index || 0).trim();
+  if (introText) {
+    steps.push(introText);
+  }
+
+  matches.forEach((match, index) => {
+    const currentStart = (match.index || 0) + match[0].length;
+    const nextStart = index + 1 < matches.length ? (matches[index + 1].index || cleanedText.length) : cleanedText.length;
+    const text = cleanedText.slice(currentStart, nextStart).trim().replace(/\s+/g, ' ');
+    if (text) {
+      steps.push(text);
+    }
+  });
+
+  const mergedStepText = steps.join('\n\n').trim();
+  if (!mergedStepText) {
+    return '';
+  }
+
+  return `<div class="apply-step-content">${renderExpandableContent(`${applyStepKeyBase}-all`, mergedStepText, 340)}</div>`;
+}
+
+function renderDetailSection(title, htmlContent, sectionId = '') {
+  if (!htmlContent) {
+    return '';
+  }
+
+  const idAttr = sectionId ? ` id="${escapeHtml(sectionId)}"` : '';
+  const headingMarkup = title ? `<h3>${escapeHtml(title)}</h3>` : '';
+  return `
+    <div class="details-block"${idAttr}>
+      ${headingMarkup}
+      ${htmlContent}
+    </div>
+  `;
+}
+
+function renderKeyValueList(entries, options = {}) {
+  const visibleEntries = entries.filter((entry) => entry && entry.label && entry.value);
+  const isStacked = Boolean(options.stacked);
+  const labelAsHeading = Boolean(options.labelAsHeading);
+  const keyPrefix = String(options.keyPrefix || 'detail-value');
+  const maxChars = Number(options.maxChars || 220);
+
+  if (visibleEntries.length === 0) {
+    return '';
   }
 
   return `
-    <ol class="apply-steps">
-      ${steps.map((step) => `<li>${escapeHtml(step)}</li>`).join('')}
-    </ol>
+    <div class="detail-key-value-grid${isStacked ? ' detail-key-value-grid--stacked' : ''}">
+      ${visibleEntries.map((entry, index) => `
+        <div class="detail-key-value-item${isStacked ? ' detail-key-value-item--stacked' : ''}">
+          ${labelAsHeading
+            ? `<h3 class="detail-key-value-label">${escapeHtml(entry.label)}</h3>`
+            : `<span class="detail-key-value-label">${escapeHtml(entry.label)}</span>`}
+          <div class="detail-key-value-value">${renderExpandableContent(`${keyPrefix}-${index + 1}`, entry.value, maxChars)}</div>
+        </div>
+      `).join('')}
+    </div>
   `;
+}
+
+function expandFaqItems(faqItems) {
+  const expandedItems = [];
+
+  faqItems.forEach((item) => {
+    const baseQuestion = String(item?.question || '').trim();
+    const baseAnswer = String(item?.answer || '').trim();
+
+    if (!baseQuestion && !baseAnswer) {
+      return;
+    }
+
+    if (!baseAnswer) {
+      expandedItems.push({ question: baseQuestion, answer: '' });
+      return;
+    }
+
+    const markerPattern = /Question:\s*([\s\S]*?)\s*Answer:\s*([\s\S]*?)(?=(?:\s*Question:\s*|$))/gi;
+    const firstQuestionIndex = baseAnswer.search(/Question:\s*/i);
+
+    if (firstQuestionIndex === -1) {
+      expandedItems.push({ question: baseQuestion || 'FAQ', answer: baseAnswer });
+      return;
+    }
+
+    const leadingAnswer = baseAnswer.slice(0, firstQuestionIndex).trim();
+    if (baseQuestion || leadingAnswer) {
+      expandedItems.push({
+        question: baseQuestion || 'FAQ',
+        answer: leadingAnswer || baseAnswer,
+      });
+    }
+
+    let match;
+    while ((match = markerPattern.exec(baseAnswer)) !== null) {
+      const question = String(match[1] || '').trim();
+      const answer = String(match[2] || '').trim();
+      if (question || answer) {
+        expandedItems.push({ question: question || 'FAQ', answer });
+      }
+    }
+  });
+
+  return expandedItems;
+}
+
+function getSafeExternalUrl(value) {
+  const text = String(value || '').trim();
+  if (!text) {
+    return '';
+  }
+
+  try {
+    const parsed = new URL(text);
+    if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+      return parsed.href;
+    }
+  } catch {
+    return '';
+  }
+
+  return '';
 }
 
 function getFilteredScholarships() {
@@ -542,22 +849,26 @@ function ListingView() {
     }).join('')
     : '<div class="empty-state">No XLSX filter logic found for this category.</div>';
 
-  const categoryCards = categories.map((category) => `
+  const categoryCards = categories.map((category) => {
+    return `
     <div class="mini-cat-card ${state.selectedCategory === category.id ? 'active' : ''}" data-id="${category.id}">
       <div class="mini-cat-title">${escapeHtml(category.name)}</div>
     </div>
-  `).join('');
+  `;
+  }).join('');
 
   const resultCards = filtered.length > 0
     ? filtered.map((scholarship, index) => {
-        const pastelClass = `scholarship-card--pastel-${index % 6}`;
-        const brandName = scholarship.brandName || categoryLookup.get(scholarship.category)?.name || 'Scholarship';
-        const brandMonogram = getBrandMonogram(brandName);
+        const categoryMeta = categoryLookup.get(scholarship.category);
+        const brandName = scholarship.brandName || categoryMeta?.name || 'Scholarship';
+        const scholarshipLogo = getScholarshipLogoUrl(scholarship);
+        const scholarshipLogoMarkup = `<div class="scholarship-logo-wrap" aria-hidden="true"><img class="scholarship-logo" src="${escapeHtml(scholarshipLogo)}" alt="${escapeHtml(brandName)} logo" onerror="this.onerror=null;this.src='/logos/_default_logo.png';"></div>`;
 
         return `
-          <div class="scholarship-card ${pastelClass}" data-id="${scholarship.id}">
+          <a class="scholarship-card" href="${escapeHtml(getScholarshipDetailPath(scholarship.id))}" data-id="${escapeHtml(String(scholarship.id))}">
             <div class="scholarship-info">
               <div class="scholarship-card-head">
+                ${scholarshipLogoMarkup}
                 <div class="deadline-top">
                   <span class="deadline-top-label">Deadline</span>
                   <span class="deadline-top-value">📅 ${escapeHtml(scholarship.deadline || 'Open')}</span>
@@ -583,7 +894,7 @@ function ListingView() {
                 <span class="deadline-value">${new Date().toLocaleDateString('en-GB').replace(/\//g, '-')}</span>
               </div>
             </div>
-          </div>
+          </a>
         `;
       }).join('')
     : `<div class="empty-state">No scholarships matched the current filters.</div>`;
@@ -648,32 +959,61 @@ function DetailsView() {
   }
 
   const categoryName = categoryLookup.get(scholarship.category)?.name || scholarship.category;
-  const bannerSummary = compactCardText(scholarship.summary || scholarship.about || scholarship.eligibility || 'Explore scholarship details, eligibility, and application guidance.', 110);
-  const scholarshipTopic = inferScholarshipTopic(scholarship);
-  const faqItems = [
-    { question: 'Who can apply?', answer: scholarship.eligibility || 'Check the eligibility section above.' },
-    { question: 'What are the benefits?', answer: scholarship.benefits || scholarship.award || 'Benefits are listed in the scholarship details.' },
-    { question: 'How do I apply?', answer: scholarship.howToApply || 'Follow the official application process for this scholarship.' },
-  ];
+  const bannerSummaryText = compactCardText(scholarship.about, 220);
+  const bannerSummaryHtml = `<p>${escapeHtml(bannerSummaryText)}</p>`;
+  const faqItems = scholarship.faqItems || [];
+  const applicationUrl = getSafeExternalUrl(scholarship.link);
+  const isSaved = state.savedScholarshipIds.includes(String(scholarship.id));
+  const breadcrumbsMarkup = `
+    <nav class="details-breadcrumbs" aria-label="Breadcrumb">
+      <a href="/" class="details-breadcrumbs__link" data-breadcrumb-home="true">Home</a>
+      <span class="details-breadcrumbs__separator" aria-hidden="true">&gt;</span>
+      <a href="${escapeHtml(getListingPath())}" class="details-breadcrumbs__link" data-breadcrumb-scholarships="true">Scholarships</a>
+      <span class="details-breadcrumbs__separator" aria-hidden="true">&gt;</span>
+      <span class="details-breadcrumbs__current">${escapeHtml(scholarship.title)}</span>
+    </nav>
+  `;
 
   const pageTabs = `
     <div class="details-tab-row">
-      <button class="details-tab ${state.detailsTab === 'about' ? 'details-tab--active' : ''}" data-target="about" type="button">About Program</button>
-      <button class="details-tab ${state.detailsTab === 'scholarships' ? 'details-tab--active' : ''}" data-target="scholarships" type="button">Scholarships</button>
-      <button class="details-tab ${state.detailsTab === 'faqs' ? 'details-tab--active' : ''}" data-target="faqs" type="button">FAQ's</button>
-      <button class="details-tab ${state.detailsTab === 'contact' ? 'details-tab--active' : ''}" data-target="contact" type="button">Contact Details</button>
-      <button class="details-tab ${state.detailsTab === 'apply' ? 'details-tab--active' : ''}" data-target="apply" type="button">Apply Now</button>
+      <button class="details-tab ${state.detailsTab === 'about' ? 'details-tab--active' : ''}" data-target="about" type="button"><span class="details-tab__icon" aria-hidden="true">📘</span><span>About Program</span></button>
+      <button class="details-tab ${state.detailsTab === 'faq' ? 'details-tab--active' : ''}" data-target="faq" type="button"><span class="details-tab__icon" aria-hidden="true">❓</span><span>FAQs</span></button>
+      <button class="details-tab ${state.detailsTab === 'contact' ? 'details-tab--active' : ''}" data-target="contact" type="button"><span class="details-tab__icon" aria-hidden="true">📞</span><span>Contact Details</span></button>
+      <button class="details-tab ${state.detailsTab === 'apply' ? 'details-tab--active' : ''}" data-target="apply" type="button"><span class="details-tab__icon" aria-hidden="true">📝</span><span>Apply Now</span></button>
     </div>
   `;
+  const awardMetaMarkup = scholarship.award
+    ? `<div class="details-banner-meta"><span class="details-meta-pill"><span class="details-meta-pill__icon" aria-hidden="true">🏆</span>${escapeHtml(compactCardText(scholarship.award, 44))}</span></div>`
+    : '';
 
-  const supportTypeText = (scholarship.filters.benefit || []).join(', ') || 'Not specified';
+  const parsedStartFromImportantDates = extractImportantDateByType(scholarship.importantDates, 'start');
+  const parsedDeadlineFromImportantDates = extractImportantDateByType(scholarship.importantDates, 'deadline');
+  const deadlineDisplay = (
+    scholarship.deadlineDisplay
+    || formatCardDeadline(scholarship.deadline)
+    || parsedDeadlineFromImportantDates
+    || 'Open'
+  );
+  let applicationStartDisplay = (
+    scholarship.applicationStartDate
+    || scholarship.applicationStart
+    || scholarship.startDate
+    || scholarship.applicationOpenDate
+    || parsedStartFromImportantDates
+    || ''
+  );
+
+  if (normalizeDateLikeText(applicationStartDisplay) === normalizeDateLikeText(deadlineDisplay)) {
+    applicationStartDisplay = parsedStartFromImportantDates || '';
+  }
+
+  applicationStartDisplay = applicationStartDisplay || 'Not specified';
+  const scholarshipLevel = inferScholarshipLevel(scholarship);
 
   const detailCards = [
-    { label: 'Topic', icon: '🧭', value: scholarshipTopic, fullValue: scholarshipTopic },
-    { label: 'Deadline', icon: '📅', value: scholarship.deadlineDisplay || formatCardDeadline(scholarship.deadline), fullValue: scholarship.deadlineDisplay || scholarship.deadline || 'Open' },
-    { label: 'Award', icon: '🏆', value: compactCardText(scholarship.award || 'Varies', 45), fullValue: scholarship.award || 'Varies' },
-    { label: 'Eligibility', icon: '🎓', value: compactCardText(scholarship.eligibility || 'See scholarship details', 58), fullValue: scholarship.eligibility || 'See scholarship details' },
-    { label: 'Support Type', icon: '🧾', value: compactCardText(supportTypeText, 46), fullValue: supportTypeText },
+    { label: 'Application Start Date', icon: '🗓️', value: compactCardText(applicationStartDisplay, 45), fullValue: applicationStartDisplay },
+    { label: 'Deadline', icon: '📅', value: deadlineDisplay, fullValue: deadlineDisplay },
+    { label: 'Level', icon: '🎓', value: scholarshipLevel, fullValue: scholarshipLevel },
   ];
 
   const bannerCardMarkup = `
@@ -681,31 +1021,115 @@ function DetailsView() {
       <div class="banner-info-card__glow" aria-hidden="true"></div>
       <div class="banner-info-card__header">
         <span class="banner-info-card__title">Key Information</span>
-        <span class="banner-info-card__tag">5 points</span>
       </div>
       <div class="banner-info-card__list">
         ${detailCards.map((card) => `
           <div class="banner-info-card__item">
             <span class="banner-info-card__icon" aria-hidden="true">${card.icon}</span>
             <span class="banner-info-card__label">${escapeHtml(card.label)}</span>
-            <span class="banner-info-card__value" title="${escapeHtml(card.fullValue)}">${escapeHtml(card.value)}</span>
-            <span class="banner-info-card__popup" role="tooltip">${escapeHtml(card.fullValue)}</span>
+            <span class="banner-info-card__value">${escapeHtml(card.value)}</span>
           </div>
         `).join('')}
       </div>
     </div>
   `;
 
+  const aboutHtml = scholarship.about
+    ? renderExpandableContent('about', scholarship.about, 380)
+    : '';
+  const detailedEligibilityHtml = scholarship.detailedEligibility || scholarship.eligibility
+    ? renderExpandableContent('detailed-eligibility', scholarship.detailedEligibility || scholarship.eligibility, 360)
+    : '';
+  const benefitsHtml = scholarship.benefits || scholarship.award
+    ? renderExpandableContent('benefits', scholarship.benefits || scholarship.award, 320)
+    : '';
+  const documentsHtml = scholarship.documents
+    ? renderExpandableContent('documents', scholarship.documents, 320)
+    : '';
+  const importantDatesHtml = scholarship.importantDates || scholarship.deadline
+    ? renderExpandableContent('important-dates', scholarship.importantDates || scholarship.deadline, 320)
+    : '';
+  const selectionCriteriaHtml = scholarship.selectionCriteria
+    ? renderExpandableContent('selection-criteria', scholarship.selectionCriteria, 320)
+    : '';
+  const termsHtml = scholarship.termsAndConditions
+    ? renderExpandableContent('terms-and-conditions', scholarship.termsAndConditions, 320)
+    : '';
+  const additionalDetailsMarkup = (scholarship.additionalDetails || [])
+    .map((item, index) => {
+      return renderDetailSection(
+        item.label,
+        renderExpandableContent(`additional-${index}`, item.value, 320),
+      );
+    })
+    .join('');
+  const sourceDataSectionsMarkup = [
+    renderDetailSection('About The Scholarship', aboutHtml, 'section-sheet-overview'),
+    renderDetailSection('Eligibility', renderKeyValueList([
+      { label: 'Detailed Eligibility', value: scholarship.detailedEligibility },
+      { label: 'Selection Criteria', value: scholarship.selectionCriteria },
+    ], { stacked: true, labelAsHeading: true, keyPrefix: `sheet-eligibility-${String(scholarship.id || 'x')}`, maxChars: 260 }), 'section-sheet-eligibility'),
+    renderDetailSection('How To Apply', renderHowToApplySteps(scholarship), 'section-sheet-apply'),
+    renderDetailSection('', renderKeyValueList([
+      { label: 'Benefits', value: scholarship.benefits },
+      { label: 'Documents', value: scholarship.documents },
+      { label: 'Terms and Conditions', value: scholarship.termsAndConditions },
+    ], { stacked: true, labelAsHeading: true, keyPrefix: `sheet-resources-${String(scholarship.id || 'x')}`, maxChars: 220 }), 'section-sheet-resources'),
+    renderDetailSection('Application Link', renderKeyValueList([
+      { label: 'Application Link', value: applicationUrl || scholarship.link },
+      { label: 'Relative Path', value: scholarship.relativePath },
+    ], { stacked: true, keyPrefix: `sheet-source-${String(scholarship.id || 'x')}`, maxChars: 180 }), 'section-sheet-source'),
+  ].filter(Boolean).join('');
+  const expandedFaqItems = expandFaqItems(faqItems);
+  const faqMarkup = expandedFaqItems.length > 0
+    ? `<div class="faq-grid">${expandedFaqItems.map((item, index) => `
+      <article class="faq-card faq-card--accordion" style="--faq-delay: ${Math.min(index, 8) * 0.04}s">
+        <button class="faq-card__header faq-card__toggle" type="button" data-expand-key="faq-${escapeHtml(String(scholarship.id || 'x'))}-${index + 1}" aria-expanded="${state.expandedContent[`faq-${String(scholarship.id || 'x')}-${index + 1}`] ? 'true' : 'false'}">
+          <span class="faq-card__index">${String(index + 1).padStart(2, '0')}</span>
+          <h4>${escapeHtml(item.question)}</h4>
+          <span class="faq-card__chevron" aria-hidden="true">▾</span>
+        </button>
+        <div class="faq-card__answer-wrap${state.expandedContent[`faq-${String(scholarship.id || 'x')}-${index + 1}`] ? ' is-open' : ''}">
+          <div class="faq-card__answer">
+          <span class="faq-card__answer-label">Answer</span>
+          <p>${escapeHtml(item.answer || 'Not specified')}</p>
+          </div>
+        </div>
+      </article>
+    `).join('')}</div>`
+    : '';
+  const contactMarkup = scholarship.contactDetails || scholarship.brandName || scholarship.link
+    ? `
+      <p><strong>Brand:</strong> ${escapeHtml(scholarship.brandName || categoryName)}</p>
+      ${scholarship.contactDetails ? `<p><strong>Contact:</strong> ${escapeHtml(scholarship.contactDetails)}</p>` : ''}
+    `
+    : '';
+  const secondarySectionsMarkup = [
+    sourceDataSectionsMarkup ? `<section class="details-subsection details-sheet-data" id="section-sheet-data">${sourceDataSectionsMarkup}</section>` : '',
+    additionalDetailsMarkup,
+    faqMarkup ? `<section class="details-subsection" id="section-faq"><h3>FAQs</h3>${faqMarkup}</section>` : '',
+    contactMarkup ? `<section class="details-subsection" id="section-contact"><h3>Contact Details</h3>${contactMarkup}</section>` : '',
+  ].filter(Boolean).join('');
+
   return `
     <main class="view-container">
+      ${breadcrumbsMarkup}
       <div class="details-banner">
         <div class="details-banner-copy">
           <p class="eyebrow">${escapeHtml(categoryName)}</p>
           <h1>${escapeHtml(scholarship.title)}</h1>
-          <p class="details-banner-tagline">${escapeHtml(bannerSummary)}</p>
-          <div class="details-banner-meta">
-            <span class="details-meta-pill">${escapeHtml(scholarshipTopic)}</span>
-            <span class="details-meta-pill">${escapeHtml(scholarship.deadlineDisplay || scholarship.deadline || 'Open deadline')}</span>
+          <div class="details-banner-tagline">${bannerSummaryHtml}</div>
+          ${awardMetaMarkup}
+          <div class="details-banner-actions">
+            <button class="details-banner-btn details-banner-btn--apply" type="button" data-open-apply="true">Apply Now</button>
+            <button
+              class="details-banner-btn details-banner-btn--save ${isSaved ? 'is-saved' : ''}"
+              type="button"
+              data-save-scholarship="${escapeHtml(String(scholarship.id))}"
+              aria-pressed="${isSaved ? 'true' : 'false'}"
+            >
+              ${isSaved ? 'Saved' : 'Save'}
+            </button>
           </div>
         </div>
         <div class="details-banner-visual" aria-hidden="true">
@@ -716,55 +1140,7 @@ function DetailsView() {
       ${pageTabs}
 
       <section class="content-section" id="section-about">
-        <div class="details-block">
-          <h2 class="section-title">About The Scholarship</h2>
-          ${renderExpandableContent('about', scholarship.about || scholarship.summary, 380)}
-        </div>
-
-        <div class="details-block">
-          <h3>Topic</h3>
-          <p>${escapeHtml(scholarshipTopic)}</p>
-        </div>
-
-        <div class="details-block">
-          <h3>Detailed Eligibility</h3>
-          ${renderExpandableContent('detailed-eligibility', scholarship.detailedEligibility || scholarship.eligibility || 'Not provided in the CSV file.', 360)}
-        </div>
-
-        <div class="details-block">
-          <h3>Benefits</h3>
-          ${renderExpandableContent('benefits', scholarship.benefits || scholarship.award || 'Not provided in the CSV file.', 320)}
-        </div>
-
-        <div class="details-block">
-          <h3>How To Apply</h3>
-          ${renderHowToApplySteps(scholarship)}
-        </div>
-
-        <section class="details-subsection" id="section-faqs">
-          <h3>FAQs</h3>
-          ${faqItems.map((item) => `
-            <div class="faq-item">
-              <h4>${escapeHtml(item.question)}</h4>
-              <p>${escapeHtml(item.answer)}</p>
-            </div>
-          `).join('')}
-        </section>
-
-        <section class="details-subsection" id="section-contact">
-          <h3>Contact Details</h3>
-          <p><strong>Brand:</strong> ${escapeHtml(scholarship.brandName || categoryName)}</p>
-          <p><strong>Reference Link:</strong> ${escapeHtml(scholarship.link || 'Not available')}</p>
-        </section>
-
-        <section class="details-subsection" id="section-apply">
-          <h3>Apply Now</h3>
-          ${renderHowToApplySteps(scholarship)}
-          <div class="details-actions">
-            <button class="details-link details-link--primary" type="button">Save Scholarship</button>
-            <button class="details-link details-link--secondary" type="button">Get Application Guidance</button>
-          </div>
-        </section>
+        ${secondarySectionsMarkup || '<div class="empty-state">No detailed information is available for this scholarship in the current sheet.</div>'}
       </section>
     </main>
   `;
@@ -848,6 +1224,20 @@ function attachEventListeners() {
   document.querySelector('#home-nav')?.addEventListener('click', (event) => {
     event.preventDefault();
     navigate('home');
+  });
+
+  document.querySelectorAll('[data-breadcrumb-home]').forEach((link) => {
+    link.addEventListener('click', (event) => {
+      event.preventDefault();
+      navigate('home');
+    });
+  });
+
+  document.querySelectorAll('[data-breadcrumb-scholarships]').forEach((link) => {
+    link.addEventListener('click', (event) => {
+      event.preventDefault();
+      navigate('listing', { category: state.selectedCategory });
+    });
   });
 
   document.querySelectorAll('.category-card').forEach((card) => {
@@ -950,7 +1340,12 @@ function attachEventListeners() {
   });
 
   document.querySelectorAll('.scholarship-card').forEach((card) => {
-    card.addEventListener('click', () => {
+    card.addEventListener('click', (event) => {
+      if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) {
+        return;
+      }
+
+      event.preventDefault();
       navigate('details', { id: card.dataset.id });
     });
   });
@@ -961,10 +1356,49 @@ function attachEventListeners() {
       state.detailsTab = target;
       render();
 
-      const targetSection = document.querySelector(`#section-${target}`);
+      const selectorByTarget = {
+        about: '#section-sheet-overview',
+        faq: '#section-faq',
+        contact: '#section-contact',
+        apply: '#section-sheet-apply',
+      };
+      const selector = selectorByTarget[target] || '#section-about';
+      const targetSection = document.querySelector(selector);
       if (targetSection) {
         targetSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
       }
+    });
+  });
+
+  document.querySelectorAll('[data-open-apply]').forEach((button) => {
+    button.addEventListener('click', () => {
+      state.detailsTab = 'apply';
+      render();
+
+      const targetSection = document.querySelector('#section-sheet-apply');
+      if (targetSection) {
+        targetSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    });
+  });
+
+  document.querySelectorAll('[data-save-scholarship]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const scholarshipId = String(button.dataset.saveScholarship || '');
+      if (!scholarshipId) {
+        return;
+      }
+
+      const savedSet = new Set(state.savedScholarshipIds);
+      if (savedSet.has(scholarshipId)) {
+        savedSet.delete(scholarshipId);
+      } else {
+        savedSet.add(scholarshipId);
+      }
+
+      state.savedScholarshipIds = Array.from(savedSet);
+      persistSavedScholarshipIds(state.savedScholarshipIds);
+      render();
     });
   });
 
@@ -978,4 +1412,11 @@ function attachEventListeners() {
 
 }
 
+window.addEventListener('popstate', () => {
+  syncStateToLocation();
+  render();
+});
+
+syncStateToLocation();
+window.history.replaceState({ view: state.view, selectedCategory: state.selectedCategory, selectedScholarshipId: state.selectedScholarshipId }, '', getRoutePath(state.view, { id: state.selectedScholarshipId }));
 render();
