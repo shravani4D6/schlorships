@@ -1075,10 +1075,6 @@ function DetailsView() {
       { label: 'Documents', value: scholarship.documents },
       { label: 'Terms and Conditions', value: scholarship.termsAndConditions },
     ], { stacked: true, labelAsHeading: true, keyPrefix: `sheet-resources-${String(scholarship.id || 'x')}`, maxChars: 220 }), 'section-sheet-resources'),
-    renderDetailSection('Application Link', renderKeyValueList([
-      { label: 'Application Link', value: applicationUrl || scholarship.link },
-      { label: 'Relative Path', value: scholarship.relativePath },
-    ], { stacked: true, keyPrefix: `sheet-source-${String(scholarship.id || 'x')}`, maxChars: 180 }), 'section-sheet-source'),
   ].filter(Boolean).join('');
   const expandedFaqItems = expandFaqItems(faqItems);
   const faqMarkup = expandedFaqItems.length > 0
