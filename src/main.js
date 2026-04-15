@@ -324,7 +324,7 @@ function navigate(view, params = {}, options = {}) {
 function Header() {
   return `
     <header class="header">
-      <div class="logo" id="logo-btn">🎓 Schlorhips</div>
+      <div class="logo" id="logo-btn">🎓 Scholarships</div>
       <nav class="nav-links">
         <a href="#" class="nav-link" id="home-nav">Home</a>
         <a href="#" class="nav-link">About Us</a>
